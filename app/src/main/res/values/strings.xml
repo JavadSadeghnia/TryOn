@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Virtual Try-On</string>
+    <string name="upload_body_photo">Upload Body Photo</string>
+    <string name="upload_clothing">Upload Clothing</string>
+    <string name="generate_tryon">Generate Try-On</string>
+    <string name="result">Result</string>
+    <string name="take_photo">Take Photo</string>
+    <string name="choose_from_gallery">Choose from Gallery</string>
+    <string name="cancel">Cancel</string>
+    <string name="processing">Processing...</string>
+    <string name="error_occurred">An error occurred</string>
+    <string name="select_both_images">Please select both images</string>
+    <string name="api_url_hint">Enter Gradio API URL</string>
+    <string name="save_url">Save URL</string>
+</resources>
