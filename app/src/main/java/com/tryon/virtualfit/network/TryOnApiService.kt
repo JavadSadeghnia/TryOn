@@ -1,47 +1,63 @@
 package com.tryon.virtualfit.network
 
+import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Multipart
 import retrofit2.http.POST
+import retrofit2.http.Part
 import retrofit2.http.Path
 import retrofit2.http.Streaming
 
 /**
  * Retrofit API interface for Virtual Try-On service
- * Gradio 4+ uses a two-step process: call + poll
+ * Gradio 4+ uses a three-step process: upload + queue + poll
  */
 interface TryOnApiService {
+
+    /**
+     * Step 0: Upload files to Gradio
+     * @param file The file to upload
+     * @return Response with file paths
+     */
+    @Multipart
+    @POST("/upload")
+    suspend fun uploadFile(
+        @Part file: MultipartBody.Part
+    ): Response<List<String>>
 
     /**
      * Step 1: Queue the prediction request
      * @param request The Gradio request containing the data
      * @return Response with event_id
      */
-    @POST("/gradio_api/call/predict")
+    @POST("/queue/join")
     suspend fun queuePrediction(
         @Body request: GradioRequest
     ): Response<GradioQueueResponse>
 
     /**
      * Step 2: Get the prediction result using server-sent events
-     * @param eventId The event ID from step 1
-     * @return Response containing the result
+     * @param sessionHash The session hash used in queue join
+     * @return Response containing the result stream
      */
-    @GET("/gradio_api/call/predict/{event_id}")
+    @GET("/queue/data")
     @Streaming
     suspend fun getPredictionResult(
-        @Path("event_id") eventId: String
+        @retrofit2.http.Query("session_hash") sessionHash: String
     ): Response<ResponseBody>
 }
 
 /**
- * Gradio API request format for gr.Interface (Gradio v5)
+ * Gradio API request format for gr.Interface (Gradio v4)
  * Images should be sent as file data objects
  */
 data class GradioRequest(
-    val data: List<GradioImageData>
+    val data: List<Any>,
+    val fn_index: Int = 0,
+    val session_hash: String
 )
 
 /**

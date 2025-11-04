@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.File
 
 /**
@@ -197,11 +199,7 @@ class TryOnViewModel : ViewModel() {
                 val bodyBase64 = Base64.encodeToString(bodyBytes, Base64.NO_WRAP)
                 val clothingBase64 = Base64.encodeToString(clothingBytes, Base64.NO_WRAP)
 
-                // Create Gradio data URLs - Gradio accepts data URLs in the url field
-                val bodyDataUrl = "data:image/jpeg;base64,$bodyBase64"
-                val clothingDataUrl = "data:image/jpeg;base64,$clothingBase64"
-
-                Log.d(TAG, "Created data URLs, lengths: body=${bodyDataUrl.length}, clothing=${clothingDataUrl.length}")
+                Log.d(TAG, "Uploading images to Gradio server...")
 
                 // Validate image sizes
                 if (bodyBytes.isEmpty() || clothingBytes.isEmpty()) {
@@ -210,32 +208,88 @@ class TryOnViewModel : ViewModel() {
                     return@launch
                 }
 
-                // Create Gradio request - Gradio v5 format with file data objects
-                val bodyImageData = com.tryon.virtualfit.network.GradioImageData(
-                    url = bodyDataUrl,
-                    orig_name = "body.jpg",
-                    size = bodyBytes.size,
-                    mime_type = "image/jpeg"
-                )
-                val clothingImageData = com.tryon.virtualfit.network.GradioImageData(
-                    url = clothingDataUrl,
-                    orig_name = "clothing.jpg",
-                    size = clothingBytes.size,
-                    mime_type = "image/jpeg"
-                )
-                val request = GradioRequest(
-                    data = listOf(bodyImageData, clothingImageData)
+                // Step 0: Upload files to Gradio
+                val apiService = RetrofitClient.getApiService()
+
+                // Upload body image
+                val bodyRequestBody = bodyBytes.toRequestBody("image/jpeg".toMediaType())
+                val bodyPart = okhttp3.MultipartBody.Part.createFormData(
+                    "files",
+                    "body.jpg",
+                    bodyRequestBody
                 )
 
-                Log.d(TAG, "Request data sizes - body: ${bodyBytes.size} bytes, clothing: ${clothingBytes.size} bytes")
+                val bodyUploadResponse = apiService.uploadFile(bodyPart)
+                if (!bodyUploadResponse.isSuccessful || bodyUploadResponse.body() == null) {
+                    Log.e(TAG, "Body image upload failed: ${bodyUploadResponse.code()}")
+                    _tryOnResult.value = TryOnResult.Error("Failed to upload body image")
+                    return@launch
+                }
+                val bodyFilePath = bodyUploadResponse.body()!![0]
+                Log.d(TAG, "Body image uploaded: $bodyFilePath")
+
+                // Upload clothing image
+                val clothingRequestBody = clothingBytes.toRequestBody("image/jpeg".toMediaType())
+                val clothingPart = okhttp3.MultipartBody.Part.createFormData(
+                    "files",
+                    "clothing.jpg",
+                    clothingRequestBody
+                )
+
+                val clothingUploadResponse = apiService.uploadFile(clothingPart)
+                if (!clothingUploadResponse.isSuccessful || clothingUploadResponse.body() == null) {
+                    Log.e(TAG, "Clothing image upload failed: ${clothingUploadResponse.code()}")
+                    _tryOnResult.value = TryOnResult.Error("Failed to upload clothing image")
+                    return@launch
+                }
+                val clothingFilePath = clothingUploadResponse.body()!![0]
+                Log.d(TAG, "Clothing image uploaded: $clothingFilePath")
+
+                // Generate a unique session hash for this request
+                val sessionHash = java.util.UUID.randomUUID().toString().replace("-", "")
+
+                // Create ImageEditor dict for human image (parameter 1)
+                // FileData format required by Gradio ImageEditor component
+                val imageEditorDict = mapOf(
+                    "background" to mapOf(
+                        "path" to bodyFilePath,
+                        "url" to null,
+                        "orig_name" to "body.jpg",
+                        "size" to null,
+                        "mime_type" to "image/jpeg"
+                    ),
+                    "layers" to emptyList<Any>()
+                )
+
+                // Create FileData dict for clothing image (parameter 2)
+                val clothingFileData = mapOf(
+                    "path" to clothingFilePath,
+                    "url" to null,
+                    "orig_name" to "clothing.jpg",
+                    "size" to null,
+                    "mime_type" to "image/jpeg"
+                )
+
+                val request = GradioRequest(
+                    data = listOf(
+                        imageEditorDict,           // 1. Human image dict (ImageEditor)
+                        clothingFileData,          // 2. Garment image (FileData dict)
+                        "A cool clothing item",    // 3. Garment description (text)
+                        true,                      // 4. is_checked (auto-mask)
+                        false,                     // 5. is_checked_crop (auto-crop)
+                        30,                        // 6. denoise_steps
+                        42                         // 7. seed
+                    ),
+                    fn_index = 2,  // Changed from 0 to 2 (Examples take index 0 and 1)
+                    session_hash = sessionHash
+                )
+
+                Log.d(TAG, "Files uploaded - body: $bodyFilePath, clothing: $clothingFilePath")
+                Log.d(TAG, "Session hash: $sessionHash")
 
                 Log.d(TAG, "Sending request to Gradio API (Step 1: Queue)")
-                Log.d(TAG, "Request data: body url length=${bodyImageData.url.length}, clothing url length=${clothingImageData.url.length}")
-                Log.d(TAG, "Body image: orig_name=${bodyImageData.orig_name}, size=${bodyImageData.size}, mime=${bodyImageData.mime_type}")
-                Log.d(TAG, "Clothing image: orig_name=${clothingImageData.orig_name}, size=${clothingImageData.size}, mime=${clothingImageData.mime_type}")
 
                 // Step 1: Queue the prediction
-                val apiService = RetrofitClient.getApiService()
                 val queueResponse = apiService.queuePrediction(request)
 
                 Log.d(TAG, "Queue response body: ${queueResponse.body()}")
@@ -265,8 +319,8 @@ class TryOnViewModel : ViewModel() {
 
                 Log.d(TAG, "Event ID received: $eventId, polling for result (Step 2)")
 
-                // Step 2: Poll for the result using SSE
-                val resultResponse = apiService.getPredictionResult(eventId)
+                // Step 2: Poll for the result using SSE with session_hash
+                val resultResponse = apiService.getPredictionResult(sessionHash)
 
                 Log.d(TAG, "Result response: code=${resultResponse.code()}, success=${resultResponse.isSuccessful}")
 

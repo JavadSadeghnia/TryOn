@@ -15,8 +15,8 @@ object ApiConfig {
      * 4. Use a fallback URL service
      */
 
-    // Primary API URL - Update this with your permanent backend
-    const val DEFAULT_API_URL = "https://38845346fa95d8fa88.gradio.live/"
+    // Primary API URL - Your NEW permanent EC2 server (Elastic IP)
+    const val DEFAULT_API_URL = "http://100.25.110.185:7860/"
 
     // Fallback API URLs in case primary fails
     val FALLBACK_URLS = listOf(
