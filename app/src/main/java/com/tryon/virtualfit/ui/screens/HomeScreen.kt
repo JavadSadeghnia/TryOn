@@ -226,7 +226,7 @@ fun HomeScreen(viewModel: TryOnViewModel) {
 
                 // Clothing Image Upload
                 ImageUploadCard(
-                    title = "Clothing Item",
+                    title = "Garment Photo",
                     imageUri = clothingImageUri,
                     onClick = {
                         isSelectingBodyImage = false
@@ -234,18 +234,52 @@ fun HomeScreen(viewModel: TryOnViewModel) {
                     }
                 )
 
-                // Category Selector (always visible)
-                ClothingCategorySelector(
-                    onCategorySelected = { category ->
-                        if (category == "Upload") {
-                            isSelectingBodyImage = false
-                            showImagePickerDialog = true
-                        } else {
-                            selectedCategory = category
-                            showCategorySamplesDialog = true
+                // Quick samples section (optional)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFFF5F5F5))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "Or try sample garments",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color.Gray
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            CategoryButton(
+                                label = "Jackets",
+                                icon = "🧥",
+                                onClick = {
+                                    selectedCategory = "Jackets"
+                                    showCategorySamplesDialog = true
+                                }
+                            )
+                            CategoryButton(
+                                label = "T-Shirts",
+                                icon = "👕",
+                                onClick = {
+                                    selectedCategory = "T-Shirts"
+                                    showCategorySamplesDialog = true
+                                }
+                            )
+                            CategoryButton(
+                                label = "Dress",
+                                icon = "👗",
+                                onClick = {
+                                    selectedCategory = "Dress"
+                                    showCategorySamplesDialog = true
+                                }
+                            )
                         }
                     }
-                )
+                }
 
                 // Generate Button
                 Button(
@@ -277,10 +311,10 @@ fun HomeScreen(viewModel: TryOnViewModel) {
             when (val result = tryOnResult) {
                 is TryOnResult.Loading -> {
                     CircularProgressIndicator(modifier = Modifier.padding(32.dp))
-                    Text("Generating try-on image...")
+                    Text("OOTDiffusion is generating your try-on...")
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "This may take 3-5 minutes (using free CPU)",
+                        "Please wait, this may take 1-3 minutes",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.secondary
                     )

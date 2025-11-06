@@ -248,39 +248,43 @@ class TryOnViewModel : ViewModel() {
                 // Generate a unique session hash for this request
                 val sessionHash = java.util.UUID.randomUUID().toString().replace("-", "")
 
-                // Create ImageEditor dict for human image (parameter 1)
-                // FileData format required by Gradio ImageEditor component
-                val imageEditorDict = mapOf(
-                    "background" to mapOf(
-                        "path" to bodyFilePath,
-                        "url" to null,
-                        "orig_name" to "body.jpg",
-                        "size" to null,
-                        "mime_type" to "image/jpeg"
-                    ),
-                    "layers" to emptyList<Any>()
+                // OOTDiffusion Half-body mode API format - 6 parameters needed!
+                // Build full URLs for the files (matching browser format exactly)
+                val baseUrl = _apiUrl.value.removeSuffix("/")
+                val bodyFileUrl = "$baseUrl/file=$bodyFilePath"
+                val clothingFileUrl = "$baseUrl/file=$clothingFilePath"
+
+                // Create FileData dict for body/model image (parameter 1)
+                // Must match browser format exactly: url field + null for size/mime_type
+                val bodyFileData = mapOf(
+                    "path" to bodyFilePath,
+                    "url" to bodyFileUrl,
+                    "orig_name" to "body.jpg",
+                    "size" to null,
+                    "mime_type" to null
                 )
 
-                // Create FileData dict for clothing image (parameter 2)
+                // Create FileData dict for clothing/garment image (parameter 2)
                 val clothingFileData = mapOf(
                     "path" to clothingFilePath,
-                    "url" to null,
+                    "url" to clothingFileUrl,
                     "orig_name" to "clothing.jpg",
                     "size" to null,
-                    "mime_type" to "image/jpeg"
+                    "mime_type" to null
                 )
 
                 val request = GradioRequest(
                     data = listOf(
-                        imageEditorDict,           // 1. Human image dict (ImageEditor)
+                        bodyFileData,              // 1. Model image (FileData dict)
                         clothingFileData,          // 2. Garment image (FileData dict)
-                        "A cool clothing item",    // 3. Garment description (text)
-                        true,                      // 4. is_checked (auto-mask)
-                        false,                     // 5. is_checked_crop (auto-crop)
-                        30,                        // 6. denoise_steps
-                        42                         // 7. seed
+                        1,                         // 3. Images (int: 1-4)
+                        20,                        // 4. Steps (int: 10-40)
+                        2,                         // 5. Guidance scale (int: 1-5)
+                        42                         // 6. Seed (int: -1 to 2147483647)
                     ),
-                    fn_index = 2,  // Changed from 0 to 2 (Examples take index 0 and 1)
+                    event_data = null,
+                    fn_index = 2,              // Half-body is fn_index 2 (examples take 0 and 1)
+                    trigger_id = 17,           // Trigger ID from browser
                     session_hash = sessionHash
                 )
 
@@ -421,9 +425,78 @@ class TryOnViewModel : ViewModel() {
                     }
                     line.startsWith("data:") -> {
                         currentData = line.substringAfter("data:").trim()
+
+                        // Parse the data to check for msg field (Gradio format)
+                        try {
+                            val jsonObject = org.json.JSONObject(currentData)
+                            val msg = jsonObject.optString("msg", "")
+
+                            if (msg == "process_completed") {
+                                val success = jsonObject.optBoolean("success", false)
+                                val output = jsonObject.optJSONObject("output")
+
+                                Log.d(TAG, "SSE process_completed: success=$success, output=$output")
+
+                                if (!success) {
+                                    // Check if there's an error message in output
+                                    val errorMsg = output?.optString("error") ?: "Unknown error"
+                                    Log.e(TAG, "Process failed with error: $errorMsg")
+                                    throw Exception("OOTDiffusion failed: ${if (errorMsg.isNullOrEmpty() || errorMsg == "null") "The model could not process the images. Please check that both images are valid and try again." else errorMsg}")
+                                }
+
+                                // Success - extract the result image from Gallery format
+                                // OOTDiffusion returns: {"data": [[{"image": {"path": "..."}}]]}
+                                // Note: Double nested array!
+                                val dataArray = output?.optJSONArray("data")
+                                if (dataArray != null && dataArray.length() > 0) {
+                                    val firstElement = dataArray.get(0)
+
+                                    // Check if it's a nested array (OOTDiffusion format)
+                                    if (firstElement is org.json.JSONArray && firstElement.length() > 0) {
+                                        val galleryItem = firstElement.getJSONObject(0)
+                                        val imageObj = galleryItem.optJSONObject("image")
+                                        if (imageObj != null) {
+                                            val imagePath = imageObj.optString("path")
+                                            if (imagePath.isNotEmpty()) {
+                                                Log.d(TAG, "Found result image path (nested Gallery format): $imagePath")
+                                                return imagePath
+                                            }
+                                        }
+                                    }
+                                    // Gallery format: {"image": {"path": "...", "url": "..."}}
+                                    else if (firstElement is org.json.JSONObject) {
+                                        val imageObj = firstElement.optJSONObject("image")
+                                        if (imageObj != null) {
+                                            val imageUrl = imageObj.optString("url") ?: imageObj.optString("path")
+                                            if (imageUrl.isNotEmpty()) {
+                                                Log.d(TAG, "Found result image URL (Gallery format): $imageUrl")
+                                                return imageUrl
+                                            }
+                                        }
+
+                                        // Fallback: direct path/url in first element
+                                        val imageUrl = firstElement.optString("url") ?: firstElement.optString("path")
+                                        if (imageUrl.isNotEmpty()) {
+                                            Log.d(TAG, "Found result image URL (direct): $imageUrl")
+                                            return imageUrl
+                                        }
+                                    } else if (firstElement is String) {
+                                        Log.d(TAG, "Found result image URL (string): $firstElement")
+                                        return firstElement
+                                    }
+
+                                    Log.e(TAG, "Could not extract image URL from: $firstElement")
+                                } else {
+                                    Log.e(TAG, "No output data in successful response")
+                                    throw Exception("Server returned success but no result image")
+                                }
+                            }
+                        } catch (e: org.json.JSONException) {
+                            // Not JSON or different format, continue
+                        }
                     }
                     line.isEmpty() && currentEvent.isNotEmpty() -> {
-                        // Process the event
+                        // Process the event (legacy format)
                         Log.d(TAG, "SSE Event: $currentEvent, Data: $currentData")
 
                         if (currentEvent == "complete") {
@@ -502,7 +575,12 @@ class TryOnViewModel : ViewModel() {
      * Download image from URL
      */
     private fun downloadImageFromUrl(url: String): ByteArray {
-        val fullUrl = if (url.startsWith("http")) url else "${_apiUrl.value.removeSuffix("/")}$url"
+        val fullUrl = if (url.startsWith("http")) {
+            url
+        } else {
+            // Gradio file paths need to be accessed via /file= endpoint
+            "${_apiUrl.value.removeSuffix("/")}/file=$url"
+        }
         Log.d(TAG, "Downloading image from: $fullUrl")
         val response = java.net.URL(fullUrl).openStream()
         return response.readBytes()
