@@ -56,8 +56,11 @@ interface TryOnApiService {
  */
 data class GradioRequest(
     val data: List<Any>,
-    val fn_index: Int = 0,
-    val session_hash: String
+    val event_data: Any? = null,
+    val fn_index: Int? = null,
+    val trigger_id: Int? = null,
+    val session_hash: String,
+    val api_name: String? = null
 )
 
 /**

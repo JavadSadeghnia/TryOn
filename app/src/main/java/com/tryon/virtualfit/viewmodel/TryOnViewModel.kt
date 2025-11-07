@@ -248,40 +248,51 @@ class TryOnViewModel : ViewModel() {
                 // Generate a unique session hash for this request
                 val sessionHash = java.util.UUID.randomUUID().toString().replace("-", "")
 
+                // IDM-VTON API format - 7 parameters needed
+                // Build full file URLs
+                val baseUrl = _apiUrl.value.removeSuffix("/")
+
+                // Helper to create FileData object with proper meta field
+                val createFileData = { path: String, origName: String, size: Int, mimeType: String ->
+                    mapOf(
+                        "meta" to mapOf("_type" to "gradio.FileData"),
+                        "path" to path,
+                        "url" to "$baseUrl/file=$path",
+                        "orig_name" to origName,
+                        "size" to size,
+                        "mime_type" to mimeType
+                    )
+                }
+
+                // Create background FileData (same data used for background and composite)
+                val backgroundFileData = createFileData(bodyFilePath, "body.jpg", bodyBytes.size, "image/jpeg")
+
                 // Create ImageEditor dict for human image (parameter 1)
-                // FileData format required by Gradio ImageEditor component
+                // Must include background, layers, and composite (composite = background for no mask)
                 val imageEditorDict = mapOf(
-                    "background" to mapOf(
-                        "path" to bodyFilePath,
-                        "url" to null,
-                        "orig_name" to "body.jpg",
-                        "size" to null,
-                        "mime_type" to "image/jpeg"
-                    ),
-                    "layers" to emptyList<Any>()
+                    "background" to backgroundFileData,
+                    "layers" to emptyList<Any>(),  // Empty for auto-mask
+                    "composite" to backgroundFileData  // Same as background when no manual mask
                 )
 
                 // Create FileData dict for clothing image (parameter 2)
-                val clothingFileData = mapOf(
-                    "path" to clothingFilePath,
-                    "url" to null,
-                    "orig_name" to "clothing.jpg",
-                    "size" to null,
-                    "mime_type" to "image/jpeg"
-                )
+                val clothingFileData = createFileData(clothingFilePath, "clothing.jpg", clothingBytes.size, "image/jpeg")
 
                 val request = GradioRequest(
                     data = listOf(
-                        imageEditorDict,           // 1. Human image dict (ImageEditor)
-                        clothingFileData,          // 2. Garment image (FileData dict)
-                        "A cool clothing item",    // 3. Garment description (text)
-                        true,                      // 4. is_checked (auto-mask)
-                        false,                     // 5. is_checked_crop (auto-crop)
-                        30,                        // 6. denoise_steps
-                        42                         // 7. seed
+                        imageEditorDict,           // 1. Human image (ImageEditor with background/layers)
+                        clothingFileData,          // 2. Garment image (FileData)
+                        "",                        // 3. Garment description (empty string like browser)
+                        true,                      // 4. Auto-mask (Yes)
+                        false,                     // 5. Auto-crop (No - matching browser)
+                        20,                        // 6. Denoising Steps (matching browser)
+                        42                         // 7. Seed
                     ),
-                    fn_index = 2,  // Changed from 0 to 2 (Examples take index 0 and 1)
-                    session_hash = sessionHash
+                    event_data = null,
+                    fn_index = 2,              // IDM-VTON function index (matching browser)
+                    trigger_id = null,
+                    session_hash = sessionHash,
+                    api_name = null            // Use fn_index instead
                 )
 
                 Log.d(TAG, "Files uploaded - body: $bodyFilePath, clothing: $clothingFilePath")
@@ -421,6 +432,46 @@ class TryOnViewModel : ViewModel() {
                     }
                     line.startsWith("data:") -> {
                         currentData = line.substringAfter("data:").trim()
+
+                        // Parse the data to check for msg field (Gradio format)
+                        try {
+                            val jsonObject = org.json.JSONObject(currentData)
+                            val msg = jsonObject.optString("msg", "")
+
+                            if (msg == "process_completed") {
+                                val success = jsonObject.optBoolean("success", false)
+                                val output = jsonObject.optJSONObject("output")
+
+                                Log.d(TAG, "SSE process_completed: success=$success, output=$output")
+
+                                if (!success) {
+                                    // Check if there's an error message in output
+                                    val errorMsg = output?.optString("error") ?: "Unknown error"
+                                    Log.e(TAG, "Process failed with error: $errorMsg")
+                                    throw Exception("IDM-VTON failed: ${if (errorMsg.isNullOrEmpty() || errorMsg == "null") "The model could not process the images. Please check that both images are valid and try again." else errorMsg}")
+                                }
+
+                                // Success - extract the result image
+                                // New format: {"data": [{"path": "...", "url": "..."}, {...}]}
+                                val dataArray = output?.optJSONArray("data")
+                                if (dataArray != null && dataArray.length() > 0) {
+                                    val firstImage = dataArray.getJSONObject(0)
+                                    val imageUrl = firstImage.optString("url")
+                                    val imagePath = firstImage.optString("path")
+
+                                    val resultUrl = if (imageUrl.isNotEmpty()) imageUrl else imagePath
+                                    if (resultUrl.isNotEmpty()) {
+                                        Log.d(TAG, "Found result image URL: $resultUrl")
+                                        return resultUrl
+                                    }
+                                }
+
+                                Log.e(TAG, "No image data in successful response")
+                                throw Exception("Server returned success but no result image")
+                            }
+                        } catch (e: org.json.JSONException) {
+                            // Not JSON or different format, continue
+                        }
                     }
                     line.isEmpty() && currentEvent.isNotEmpty() -> {
                         // Process the event
